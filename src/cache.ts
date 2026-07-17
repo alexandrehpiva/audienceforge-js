@@ -11,11 +11,21 @@ interface CacheEntry<T> {
   expiresAt: number;
 }
 
+/** Limite padrão de entradas simultâneas — evita memory leak em uso de longa duração. */
+const DEFAULT_MAX_ENTRIES = 10_000;
+
 export class TtlCache<T> {
   private readonly store = new Map<string, CacheEntry<T>>();
 
-  /** @param ttlMs tempo de vida em ms. 0 desabilita o cache (get sempre miss). */
-  constructor(private readonly ttlMs: number) {}
+  /**
+   * @param ttlMs tempo de vida em ms. 0 desabilita o cache (get sempre miss).
+   * @param maxEntries limite de entradas simultâneas; ao exceder, a mais antiga
+   *   (por ordem de inserção) é descartada antes de inserir a nova.
+   */
+  constructor(
+    private readonly ttlMs: number,
+    private readonly maxEntries: number = DEFAULT_MAX_ENTRIES,
+  ) {}
 
   get(key: string): T | undefined {
     if (this.ttlMs <= 0) return undefined;
@@ -30,6 +40,10 @@ export class TtlCache<T> {
 
   set(key: string, value: T): void {
     if (this.ttlMs <= 0) return;
+    if (!this.store.has(key) && this.store.size >= this.maxEntries) {
+      const oldestKey = this.store.keys().next().value;
+      if (oldestKey !== undefined) this.store.delete(oldestKey);
+    }
     this.store.set(key, { value, expiresAt: Date.now() + this.ttlMs });
   }
 

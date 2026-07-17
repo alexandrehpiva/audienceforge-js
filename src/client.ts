@@ -30,6 +30,7 @@ function normalizeAttributes(attributes?: UserContext['attributes']): Record<str
   const out: Record<string, string> = {};
   if (!attributes) return out;
   for (const [k, v] of Object.entries(attributes)) {
+    if (v === undefined || v === null) continue;
     out[k] = String(v);
   }
   return out;
@@ -80,6 +81,12 @@ export class AudienceForgeClient {
     experimentKey: string,
     userContext: UserContext,
   ): Promise<ExperimentResult> {
+    if (!userContext || !userContext.userId) {
+      // Sem userId não há avaliação determinística possível — fallback silencioso,
+      // igual ao comportamento de evaluateFlag (contrato "nunca lança").
+      return { variant: CONTROL_VARIANT };
+    }
+
     const attributes = normalizeAttributes(userContext.attributes);
     const cacheKey = buildCacheKey(
       'experiment',

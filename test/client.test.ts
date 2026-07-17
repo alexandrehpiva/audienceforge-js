@@ -128,4 +128,22 @@ describe('evaluateExperiment', () => {
     const c = AudienceForge.init({ apiKey: 'sdk-key', fetchImpl });
     expect(await c.evaluateExperiment('x', { userId: 'u' })).toEqual({ variant: 'control' });
   });
+
+  it('fallback { variant: control } sem lançar quando userContext é undefined', async () => {
+    const fetchImpl = vi.fn() as unknown as typeof fetch;
+    const c = AudienceForge.init({ apiKey: 'sdk-key', fetchImpl });
+    // @ts-expect-error teste de runtime: userContext ausente não deve lançar TypeError
+    const res = await c.evaluateExperiment('checkout-cta', undefined);
+    expect(res).toEqual({ variant: 'control' });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('fallback { variant: control } sem lançar quando userId é ausente', async () => {
+    const fetchImpl = vi.fn() as unknown as typeof fetch;
+    const c = AudienceForge.init({ apiKey: 'sdk-key', fetchImpl });
+    // @ts-expect-error teste de runtime: userId ausente
+    const res = await c.evaluateExperiment('checkout-cta', {});
+    expect(res).toEqual({ variant: 'control' });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
 });

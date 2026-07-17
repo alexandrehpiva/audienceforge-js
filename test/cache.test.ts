@@ -30,6 +30,28 @@ describe('TtlCache', () => {
     cache.clear();
     expect(cache.get('k')).toBeUndefined();
   });
+
+  it('descarta a entrada mais antiga ao exceder maxEntries', () => {
+    const cache = new TtlCache<number>(60_000, 3);
+    cache.set('a', 1);
+    cache.set('b', 2);
+    cache.set('c', 3);
+    cache.set('d', 4); // deve expulsar 'a'
+
+    expect(cache.get('a')).toBeUndefined();
+    expect(cache.get('b')).toBe(2);
+    expect(cache.get('c')).toBe(3);
+    expect(cache.get('d')).toBe(4);
+    expect(cache.size).toBe(3);
+  });
+
+  it('não cresce sem limite mesmo com muitas chaves distintas', () => {
+    const cache = new TtlCache<number>(60_000, 100);
+    for (let i = 0; i < 1000; i++) {
+      cache.set(`k${i}`, i);
+    }
+    expect(cache.size).toBeLessThanOrEqual(100);
+  });
 });
 
 describe('buildCacheKey', () => {
