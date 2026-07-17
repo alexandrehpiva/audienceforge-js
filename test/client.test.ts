@@ -92,6 +92,56 @@ describe('isEnabled', () => {
   });
 });
 
+describe('dedup e cache negativo', () => {
+  it('deduplica chamadas concorrentes idênticas: N chamadas em paralelo = 1 POST', async () => {
+    let resolveFetch: (r: Response) => void;
+    const fetchImpl = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveFetch = resolve;
+        }),
+    ) as unknown as typeof fetch;
+    const c = AudienceForge.init({ apiKey: 'sdk-key', fetchImpl });
+
+    const calls = Promise.all([
+      c.isEnabled('dark-mode', { userId: 'user-1' }),
+      c.isEnabled('dark-mode', { userId: 'user-1' }),
+      c.isEnabled('dark-mode', { userId: 'user-1' }),
+    ]);
+    resolveFetch!(
+      new Response(JSON.stringify(flagResponse), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    );
+    const results = await calls;
+
+    expect(results).toEqual([true, true, true]);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it('cache negativo: após falha, próxima chamada dentro do TTL não bate na rede', async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new Error('network down');
+    }) as unknown as typeof fetch;
+    const c = AudienceForge.init({ apiKey: 'sdk-key', fetchImpl, negativeCacheTtlMs: 60_000 });
+
+    await c.isEnabled('dark-mode', { userId: 'user-1' });
+    await c.isEnabled('dark-mode', { userId: 'user-1' });
+
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it('cache negativo desabilitado (0) tenta a rede em toda chamada', async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new Error('network down');
+    }) as unknown as typeof fetch;
+    const c = AudienceForge.init({ apiKey: 'sdk-key', fetchImpl, negativeCacheTtlMs: 0 });
+
+    await c.isEnabled('dark-mode', { userId: 'user-1' });
+    await c.isEnabled('dark-mode', { userId: 'user-1' });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('getVariant', () => {
   it('retorna a variante avaliada', async () => {
     const c = AudienceForge.init({ apiKey: 'sdk-key', fetchImpl: okFetch(flagResponse) });

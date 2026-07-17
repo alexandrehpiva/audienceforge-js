@@ -21,6 +21,7 @@ import type {
 const DEFAULT_API_URL = 'https://api.audienceforge.dev';
 const DEFAULT_ENVIRONMENT = 'production';
 const DEFAULT_CACHE_TTL_MS = 30_000;
+const DEFAULT_NEGATIVE_CACHE_TTL_MS = 5_000;
 const DEFAULT_TIMEOUT_MS = 1_000;
 /** Variante padrão retornada no fallback (alinha com o backend). */
 const CONTROL_VARIANT = 'control';
@@ -43,6 +44,13 @@ export class AudienceForgeClient {
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
   private readonly cache: TtlCache<FlagEvaluationResponse | ExperimentEvaluationResponse>;
+  /** Cache negativo: chaves que falharam recentemente pulam a rede até expirar. */
+  private readonly negativeCache: TtlCache<true>;
+  /** Requisições em voo por chave — dedup de chamadas concorrentes idênticas. */
+  private readonly inFlight = new Map<
+    string,
+    Promise<FlagEvaluationResponse | ExperimentEvaluationResponse | undefined>
+  >();
 
   constructor(config: InitConfig) {
     if (!config || !config.apiKey) {
@@ -62,6 +70,7 @@ export class AudienceForgeClient {
     this.fetchImpl = fetchImpl.bind(globalThis);
 
     this.cache = new TtlCache(config.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS);
+    this.negativeCache = new TtlCache(config.negativeCacheTtlMs ?? DEFAULT_NEGATIVE_CACHE_TTL_MS);
   }
 
   /** Avalia se uma flag está habilitada. Fallback: `false`. */
@@ -99,30 +108,58 @@ export class AudienceForgeClient {
     const cached = this.cache.get(cacheKey) as ExperimentEvaluationResponse | undefined;
     if (cached) return { variant: cached.variant || CONTROL_VARIANT };
 
-    try {
-      const res = await postJson<ExperimentEvaluationResponse>({
-        url: `${this.apiUrl}/experiments/api/v1/experiments/evaluate`,
-        apiKey: this.apiKey,
-        // Contrato atual do experiments-service: experiment_key/user_id/environment/context.
-        body: {
-          experiment_key: experimentKey,
-          user_id: userContext.userId,
-          environment: this.environment,
-          context: attributes,
-        },
-        timeoutMs: this.timeoutMs,
-        fetchImpl: this.fetchImpl,
-      });
-      this.cache.set(cacheKey, res);
-      return { variant: res.variant || CONTROL_VARIANT };
-    } catch {
+    if (this.negativeCache.get(cacheKey)) {
       return { variant: CONTROL_VARIANT };
     }
+
+    const res = await this.dedupedFetch(cacheKey, async () => {
+      try {
+        const res = await postJson<ExperimentEvaluationResponse>({
+          url: `${this.apiUrl}/experiments/api/v1/experiments/evaluate`,
+          apiKey: this.apiKey,
+          // Contrato atual do experiments-service: experiment_key/user_id/environment/context.
+          body: {
+            experiment_key: experimentKey,
+            user_id: userContext.userId,
+            environment: this.environment,
+            context: attributes,
+          },
+          timeoutMs: this.timeoutMs,
+          fetchImpl: this.fetchImpl,
+        });
+        this.cache.set(cacheKey, res);
+        return res;
+      } catch {
+        this.negativeCache.set(cacheKey, true);
+        return undefined;
+      }
+    });
+    return { variant: (res as ExperimentEvaluationResponse | undefined)?.variant || CONTROL_VARIANT };
   }
 
   /** Limpa o cache local (útil em testes ou após mudanças conhecidas). */
   clearCache(): void {
     this.cache.clear();
+    this.negativeCache.clear();
+  }
+
+  /**
+   * Deduplica chamadas concorrentes para a mesma chave: se já existe uma
+   * requisição em voo, todas as chamadas aguardam a mesma promise em vez de
+   * disparar N POSTs idênticos.
+   */
+  private dedupedFetch<T extends FlagEvaluationResponse | ExperimentEvaluationResponse>(
+    cacheKey: string,
+    fn: () => Promise<T | undefined>,
+  ): Promise<T | undefined> {
+    const existing = this.inFlight.get(cacheKey);
+    if (existing) return existing as Promise<T | undefined>;
+
+    const promise = fn().finally(() => {
+      this.inFlight.delete(cacheKey);
+    });
+    this.inFlight.set(cacheKey, promise);
+    return promise;
   }
 
   /** Avaliação de flag com cache + fallback silencioso. Retorna `undefined` no fallback. */
@@ -141,23 +178,30 @@ export class AudienceForgeClient {
     const cached = this.cache.get(cacheKey) as FlagEvaluationResponse | undefined;
     if (cached) return cached;
 
-    try {
-      const res = await postJson<FlagEvaluationResponse>({
-        url: `${this.apiUrl}/flags/api/v1/evaluate`,
-        apiKey: this.apiKey,
-        body: {
-          flag_key: flagKey,
-          user_key: userContext.userId,
-          environment: this.environment,
-          attributes,
-        },
-        timeoutMs: this.timeoutMs,
-        fetchImpl: this.fetchImpl,
-      });
-      this.cache.set(cacheKey, res);
-      return res;
-    } catch {
+    if (this.negativeCache.get(cacheKey)) {
       return undefined;
     }
+
+    return this.dedupedFetch(cacheKey, async () => {
+      try {
+        const res = await postJson<FlagEvaluationResponse>({
+          url: `${this.apiUrl}/flags/api/v1/evaluate`,
+          apiKey: this.apiKey,
+          body: {
+            flag_key: flagKey,
+            user_key: userContext.userId,
+            environment: this.environment,
+            attributes,
+          },
+          timeoutMs: this.timeoutMs,
+          fetchImpl: this.fetchImpl,
+        });
+        this.cache.set(cacheKey, res);
+        return res;
+      } catch {
+        this.negativeCache.set(cacheKey, true);
+        return undefined;
+      }
+    });
   }
 }

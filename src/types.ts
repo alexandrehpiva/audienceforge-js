@@ -25,6 +25,12 @@ export interface InitConfig {
   environment?: string;
   /** TTL do cache local em ms. Default: 30000 (30s). Use 0 para desabilitar o cache. */
   cacheTtlMs?: number;
+  /**
+   * TTL do cache negativo em ms — evita pagar o timeout inteiro em toda
+   * avaliação enquanto a API estiver fora do ar. Default: 5000 (5s). Use 0
+   * para desabilitar (volta a tentar a rede a cada chamada com fallback).
+   */
+  negativeCacheTtlMs?: number;
   /** Timeout por request em ms antes do fallback silencioso. Default: 1000. */
   timeoutMs?: number;
   /** Implementação de fetch (para Node < 18 ou testes). Default: globalThis.fetch. */
