@@ -1,6 +1,6 @@
 {
   "name": "audienceforge-js",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Official JavaScript/TypeScript SDK for AudienceForge — feature flags and A/B testing.",
   "type": "module",
   "main": "./dist/index.cjs",
